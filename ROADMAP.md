@@ -154,10 +154,11 @@ optimisation work and neither torch.profiler nor perfetto makes it easy.
 - [x] `tree_bytes` for sizing any nested array structure
 - [x] `walkthrough.py`, six runnable steps explaining the mechanism
 - [x] roofline: measured machine ceilings, MBU / MFU, names the binding resource
+- [x] installable package with a `mlxprof` command, own venv, no voice dependency
+- [x] `mlxprof bench` and `mlxprof ceiling`
 
 ### next, in order
 
-- [ ] **5. `mlxprof bench` cli.** the front door. one command, the one screen above
 - [ ] **6. `mlxprof.serve()` + localhost viewer.** the ergonomic that gets it used
 - [ ] 7. model matrix: decoder-only llm at two quantisations, not just whisper
 - [ ] 8. self time vs total in the tree (gprof convention, expected everywhere)
@@ -227,6 +228,12 @@ mode (item 10) to get undistorted totals to reconcile against.
   does not drop when you free things
 - first decode step is 11x slower than warm, kernel compilation. any benchmark
   without warmup silently attributes that to the model
+- `prompt_tps` on a cold `stream_generate` is ~10x low (231 vs 2400 tok/s). this bug
+  bit us three times, in walkthrough step 3, in the whisper encoder, and in the first
+  version of `bench`, which is why item 9 exists
+- the observer effect scales with how much real work a layer does. at seq 1 the layer
+  split inflates 1687%, at 128 it is 291%, at 512 it is 165%. per layer profiling of a
+  single decode step measures our own instrumentation, not the model
 
 ## references we took from
 
