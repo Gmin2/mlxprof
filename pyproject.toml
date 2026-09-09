@@ -1,0 +1,23 @@
+[project]
+name = "mlxprof"
+version = "0.1.0"
+description = "Profiler for models running locally on Apple silicon"
+requires-python = ">=3.10"
+dependencies = [
+    "mlx>=0.29",
+    "mlx-lm>=0.28",
+    "numpy>=2.0",
+]
+
+[project.optional-dependencies]
+whisper = ["mlx-whisper>=0.4", "soundfile>=0.13", "matplotlib>=3.9"]
+
+[project.scripts]
+mlxprof = "mlxprof.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mlxprof"]
