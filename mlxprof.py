@@ -72,6 +72,28 @@ def weight_mb(model):
     return sum(p.size * p.dtype.size for _, p in tree_flatten(model.parameters())) / MB
 
 
+def tree_bytes(obj):
+    """Bytes of every mx.array reachable in a nested structure. Shared arrays count once."""
+    seen = {}
+
+    def walk(o):
+        if isinstance(o, mx.array):
+            seen[id(o)] = o.size * o.dtype.size
+        elif isinstance(o, (list, tuple)):
+            for v in o:
+                walk(v)
+        elif isinstance(o, dict):
+            for v in o.values():
+                walk(v)
+
+    walk(obj)
+    return sum(seen.values())
+
+
+def tree_mb(obj):
+    return tree_bytes(obj) / MB
+
+
 def working_set_mb():
     return mx.device_info()["max_recommended_working_set_size"] / MB
 
