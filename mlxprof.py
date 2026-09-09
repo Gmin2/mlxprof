@@ -76,6 +76,98 @@ def weight_mb(model):
     return sum(seen.values()) / MB
 
 
+def param_count(model):
+    """Logical parameter count. Quantised weights are stored packed into uint32,
+    so p.size counts words rather than parameters and undercounts by 32/bits."""
+    expand = {}
+    for _, mod in model.named_modules():
+        bits = getattr(mod, "bits", None)
+        w = getattr(mod, "weight", None)
+        if bits and isinstance(w, mx.array) and w.dtype == mx.uint32:
+            expand[id(w)] = 32 // bits
+    seen = {}
+    for _, p in tree_flatten(model.parameters()):
+        seen[id(p)] = p.size * expand.get(id(p), 1)
+    return sum(seen.values())
+
+
+def _time_op(fn, trials):
+    for _ in range(3):
+        mx.eval(fn())
+    t0 = time.perf_counter()
+    for _ in range(trials):
+        mx.eval(fn())
+    return (time.perf_counter() - t0) / trials
+
+
+def measure_bandwidth(mb=256, trials=20):
+    """Achievable memory bandwidth in GB/s. Measured, not read off a spec sheet."""
+    n = mb * 1024 * 1024 // 4
+    a = mx.random.normal((n,))
+    b = mx.random.normal((n,))
+    mx.eval(a, b)
+    kernels = [
+        (lambda: a + 0.0, 2 * n * 4),
+        (lambda: a + b, 3 * n * 4),
+        (lambda: a * b + a, 3 * n * 4),
+    ]
+    return max(moved / _time_op(fn, trials) / 1e9 for fn, moved in kernels)
+
+
+def measure_peak_flops(n=4096, trials=20, dtype=None):
+    """Peak matmul throughput in TFLOP/s."""
+    a = mx.random.normal((n, n))
+    b = mx.random.normal((n, n))
+    if dtype is not None:
+        a, b = a.astype(dtype), b.astype(dtype)
+    mx.eval(a, b)
+    return 2 * n**3 / _time_op(lambda: a @ b, trials) / 1e12
+
+
+def machine_ceiling(dtype=None):
+    """The two rooflines for this machine, plus the intensity where they cross."""
+    bw = measure_bandwidth()
+    tf = measure_peak_flops(dtype=dtype)
+    return {
+        "device": mx.device_info()["device_name"],
+        "peak_gbs": bw,
+        "peak_tflops": tf,
+        "ridge": tf * 1e12 / (bw * 1e9),
+    }
+
+
+def roofline(flops, bytes_moved, seconds, ceiling):
+    """Place one phase on the roofline and name what is holding it back."""
+    intensity = flops / bytes_moved if bytes_moved else 0.0
+    achieved_flops = flops / seconds
+    achieved_gbs = bytes_moved / seconds / 1e9
+    attainable = min(ceiling["peak_tflops"] * 1e12, intensity * ceiling["peak_gbs"] * 1e9)
+    compute_bound = intensity > ceiling["ridge"]
+    return {
+        "intensity": intensity,
+        "achieved_gbs": achieved_gbs,
+        "achieved_tflops": achieved_flops / 1e12,
+        "bound": "compute" if compute_bound else "memory",
+        "metric": "MFU" if compute_bound else "MBU",
+        "utilization": (
+            achieved_flops / (ceiling["peak_tflops"] * 1e12)
+            if compute_bound
+            else achieved_gbs / ceiling["peak_gbs"]
+        ),
+        "roofline_utilization": achieved_flops / attainable if attainable else 0.0,
+        "headroom_x": attainable / achieved_flops if achieved_flops else 0.0,
+    }
+
+
+def print_roofline(name, r):
+    pct = r["utilization"] * 100
+    bar = "#" * int(pct / 2.5)
+    print(
+        f'  {name:<9} {r["intensity"]:8.1f} {r["bound"]:>8}  {pct:5.1f}% {r["metric"]}'
+        f'  {bar:<40} {r["headroom_x"]:.1f}x headroom'
+    )
+
+
 def tree_bytes(obj):
     """Bytes of every mx.array reachable in a nested structure. Shared arrays count once."""
     seen = {}
