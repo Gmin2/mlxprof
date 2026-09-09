@@ -69,7 +69,11 @@ class LayerProfiler:
 
 
 def weight_mb(model):
-    return sum(p.size * p.dtype.size for _, p in tree_flatten(model.parameters())) / MB
+    """Bytes of unique parameters. Shared or tied arrays are counted once."""
+    seen = {}
+    for _, p in tree_flatten(model.parameters()):
+        seen[id(p)] = p.size * p.dtype.size
+    return sum(seen.values()) / MB
 
 
 def working_set_mb():
