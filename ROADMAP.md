@@ -3,6 +3,11 @@
 `llama-bench` plus a roofline plus per layer detail, for macs, where none of those
 three exist.
 
+**This file is the plan.** If it is not written here it is not the plan. Update it
+when a decision changes, do not leave decisions in chat.
+
+---
+
 ## the problem
 
 this is everything mlx tells you today about a running model:
@@ -16,8 +21,8 @@ Peak memory: 0.338 GB
 is 297 tokens/sec good? is there room to improve? if you optimise, what do you
 change? none of those are answerable from three numbers.
 
-between `mlx_lm.benchmark` at the coarse end and a `.gputrace` in xcode at the
-fine end there is nothing. that gap is the product.
+between `mlx_lm.benchmark` at the coarse end and a `.gputrace` in xcode at the fine
+end there is nothing. that gap is the product.
 
 ## what we say instead
 
@@ -37,37 +42,66 @@ mlx says 297 tokens/sec. we say 297 is a third of what the machine can do, you a
 memory bound, and two thirds of your bandwidth is idle. one of those tells you what
 to do next.
 
+---
+
 ## the ux
 
-one line in, browser out. no config, no flags, no artifact juggling.
+### the front door: two lines, then look in the browser
 
 ```python
 import mlxprof
-mlxprof.serve()          # localhost:7878
+mlxprof.serve()                 # localhost:7878, opens your browser
 
-# your normal mlx code, unchanged
+# your normal mlx code, completely unchanged below this line
 model, tok = load("mlx-community/Qwen2.5-0.5B-Instruct-4bit")
 generate(model, tok, "hello", max_tokens=100)
 ```
 
-every forward pass and every generation shows up live in the browser as a run.
-click a run and you get the verdict, the layer table, the memory curve.
+no config, no flags, no artifact juggling. every forward pass and every generation
+appears live in the browser as a run.
 
-for people who do not want to touch their code:
+the friction of `--out run.json` then `mlxprof view run.json` is what stops people
+using a tool. neatlogs proved the one-line-then-look-in-browser ergonomic is what
+gets adopted, and we copy it.
+
+### screen 1: the run list, newest first
+
+```
+  #  model                        bound     util    tok/s    peak
+  3  Qwen2.5-0.5B-4bit            memory     33%    297.0    338M
+  2  Qwen2.5-0.5B-4bit            memory     31%    281.4    338M
+  1  whisper-large-v3-turbo       compute     --    248ms     2.2G
+```
+
+runs accumulate, so comparing two is selecting both. that is `diff` without a cli.
+
+### screen 2: click a run, verdict first
+
+```
+  ┌───────────────────────────────────────────────┐
+  │  MEMORY BOUND · 33% MBU · 67% headroom        │   <- the answer, top of page
+  │  297 tok/s of a possible ~890                 │
+  └───────────────────────────────────────────────┘
+
+  where the time goes          where the memory goes
+  Linear     92.1% ##########  weights  265M ########
+  LayerNorm   5.2% #           kv        12M #
+  other       2.7%             peak     338M
+
+  accuracy: per layer inflated ~29%, totals exact
+```
+
+the verdict is the top of the page, not buried. the detail is underneath for when
+you believe the verdict and want to act on it.
+
+### the terminal, for people who will not edit their code
 
 ```
 mlxprof run -- python my_script.py
 mlxprof bench --model <repo>
 ```
 
-and the artifact path, for sharing and comparing:
-
-```
-mlxprof bench --model <repo> --out run.json
-mlxprof diff bf16.json 4bit.json
-```
-
-## what a run looks like
+`bench` prints one screen:
 
 ```
 machine    Apple M5 Pro, 24 GB unified, 232 GB/s measured
@@ -86,21 +120,82 @@ memory     weights 265 MB   kv 12 MB   peak 338 MB   1.8% of working set
 accuracy   per layer numbers inflated ~29%, totals are exact
 ```
 
-## plan
+### the artifact, for sharing and comparing
 
-| # | piece | why | state |
-|---|---|---|---|
-| 1 | per layer timing, reconciled | the mechanism | done |
-| 2 | memory attribution | where unified memory goes | done |
-| 3 | decode loop + kv cache | generation, not forward passes | done |
-| 4 | **roofline: MBU / MFU, name the binding resource** | tells you if optimising is even possible. the headline number | next |
-| 5 | `mlxprof bench` cli | the front door, one command | |
-| 6 | `mlxprof.serve()` + localhost viewer | the ergonomic that gets it used | |
-| 7 | model matrix, not just whisper | decoder-only llm at 2 quantisations | |
-| 8 | self time vs total | expected in every profiler (gprof) | |
-| 9 | one schedule object | kills the warmup bug class (torch.profiler) | |
-| 10 | sampling mode | undistorted ground truth to calibrate against (py-spy) | |
-| 11 | `mlxprof diff` | the optimisation loop nobody supports well | |
+```
+mlxprof bench --model <repo> --out run.json
+mlxprof diff bf16.json 4bit.json
+```
+
+```
+metric              bf16      4bit      change
+end to end        257.5ms   161.2ms     -37.4%
+weights            1211MB    340MB      -71.9%
+peak active        1971MB    892MB      -54.7%
+
+slower layers
+  blocks.7.mlp2     1.83ms    2.41ms     +31.7%   <- dequant overhead
+faster layers
+  blocks.0.attn     4.12ms    2.02ms     -51.0%
+```
+
+"i changed quantisation, what got faster and what got slower" is the actual loop of
+optimisation work and neither torch.profiler nor perfetto makes it easy.
+
+---
+
+## todo
+
+### done
+
+- [x] per layer timing via per instance class swap, with honest reconciliation
+- [x] memory attribution over a forward pass, weights / activations / buffer cache
+- [x] decode loop profiling with kv cache growth, self vs cross
+- [x] `tree_bytes` for sizing any nested array structure
+- [x] `walkthrough.py`, six runnable steps explaining the mechanism
+
+### next, in order
+
+- [ ] **4. roofline.** measure the machine ceiling empirically, compute MBU for
+      bandwidth bound decode and MFU for compute bound prefill, name the binding
+      resource. this is the headline number every screen above is built on
+- [ ] **5. `mlxprof bench` cli.** the front door. one command, the one screen above
+- [ ] **6. `mlxprof.serve()` + localhost viewer.** the ergonomic that gets it used
+- [ ] 7. model matrix: decoder-only llm at two quantisations, not just whisper
+- [ ] 8. self time vs total in the tree (gprof convention, expected everywhere)
+- [ ] 9. one schedule object for warmup (torch.profiler convention, kills a bug class)
+- [ ] 10. sampling mode, undistorted ground truth to calibrate the instrumented
+      numbers against (py-spy convention)
+- [ ] 11. `mlxprof diff`
+
+4 to 6 is the product. everything else is polish underneath it.
+
+### later, voice layer
+
+built on the core, and the only part that gets a real timeline, because voice is the
+only case where tracks genuinely overlap.
+
+- [ ] turn timeline: mic, vad, asr, llm, tts on one wall clock axis
+- [ ] audio and mels attached to spans via a generic artifact hook
+- [ ] latency budget assertions, ttfa, barge in, endpointing
+
+---
+
+## open problems
+
+**auto attach with no model handed to us.** `mlxprof.serve()` has to instrument
+without being given the model object. patching `nn.Module.__call__` once at import
+does not work, because subclasses define their own `__call__` and sail past it,
+which is exactly why we do the per instance class swap. `serve()` needs to hook
+subclass creation via `__init_subclass__` and wrap each module class as it is
+defined. this decides whether the two line front door is possible at all.
+
+**the observer effect.** forcing eval to measure costs 1.3x on real models and 1.9x
+on toys, so absolute per layer numbers inflate. a fixed calibration constant will
+not work because the distortion scales with layer size. the honest fix is a sampling
+mode (item 10) to get undistorted totals to reconcile against.
+
+---
 
 ## decided, do not relitigate
 
@@ -108,12 +203,17 @@ accuracy   per layer numbers inflated ~29%, totals are exact
   bar chart with a wasted axis. timelines earn their place only for the generation
   loop over steps, and for voice where tracks genuinely overlap.
 - **not a monitor.** neatlogs and grafana watch fleets in production. nobody serves
-  traffic from 500 macs. this is a development tool, the server is a viewer.
-- **general core, voice on top.** the test for which layer something belongs to: does
-  it need to know about time inside a conversation? no means core, yes means voice.
-  do not build a general ui.
+  traffic from 500 macs. this is a development tool, the server is a viewer for
+  runs, not a always-on dashboard.
+- **general core, voice on top.** the test for which layer something belongs to:
+  does it need to know about time inside a conversation? no means core, yes means
+  voice. do not build a general ui.
 - **we print our own error bars.** every profiler distorts. we are the only one that
   reports the distortion next to the result.
+- **verdict before detail.** the binding resource and the utilization go at the top
+  of every screen. per layer tables are for after you believe the verdict.
+
+---
 
 ## what we learned building it
 
@@ -125,4 +225,17 @@ accuracy   per layer numbers inflated ~29%, totals are exact
 - whisper turbo has 4 decoder layers, not 32. its cross attention kv is 58 MB and
   fixed, while self attention kv is 1 MB and growing. every decoder-only intuition
   about kv cache inverts for encoder-decoder models
-- freed activations go to mlx's buffer pool, not back to the os
+- freed activations go to mlx's buffer pool, not back to the os, which is why memory
+  does not drop when you free things
+- first decode step is 11x slower than warm, kernel compilation. any benchmark
+  without warmup silently attributes that to the model
+
+## references we took from
+
+- roofline model and MBU / MFU: the binding resource framing, and the rule to report
+  the utilization whose ceiling is 100% for that resource
+- gprof: self time vs total time
+- torch.profiler: `schedule(wait, warmup, active, repeat)` as a first class object
+- py-spy: sampling as an alternative to instrumentation
+- neatlogs: one line init, and readable hierarchy with key numbers as inline chips
+- llama.cpp `llama-bench`: the local inference benchmark table shape
