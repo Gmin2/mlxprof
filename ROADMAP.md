@@ -153,12 +153,10 @@ optimisation work and neither torch.profiler nor perfetto makes it easy.
 - [x] decode loop profiling with kv cache growth, self vs cross
 - [x] `tree_bytes` for sizing any nested array structure
 - [x] `walkthrough.py`, six runnable steps explaining the mechanism
+- [x] roofline: measured machine ceilings, MBU / MFU, names the binding resource
 
 ### next, in order
 
-- [ ] **4. roofline.** measure the machine ceiling empirically, compute MBU for
-      bandwidth bound decode and MFU for compute bound prefill, name the binding
-      resource. this is the headline number every screen above is built on
 - [ ] **5. `mlxprof bench` cli.** the front door. one command, the one screen above
 - [ ] **6. `mlxprof.serve()` + localhost viewer.** the ergonomic that gets it used
 - [ ] 7. model matrix: decoder-only llm at two quantisations, not just whisper
