@@ -157,10 +157,10 @@ optimisation work and neither torch.profiler nor perfetto makes it easy.
 - [x] installable package with a `mlxprof` command, own venv, no voice dependency
 - [x] `mlxprof bench` and `mlxprof ceiling`
 - [x] real chip topology from sysctl, and a warning when the machine is too busy
+- [x] `mlxprof.serve()`: whole process auto attach and a localhost viewer
 
 ### next, in order
 
-- [ ] **6. `mlxprof.serve()` + localhost viewer.** the ergonomic that gets it used
 - [ ] 7. model matrix: decoder-only llm at two quantisations, not just whisper
 - [ ] 8. self time vs total in the tree (gprof convention, expected everywhere)
 - [ ] 9. one schedule object for warmup (torch.profiler convention, kills a bug class)
@@ -183,19 +183,20 @@ only case where tracks genuinely overlap.
 
 ## open problems
 
-**auto attach with no model handed to us.** `mlxprof.serve()` has to instrument
-without being given the model object. patching `nn.Module.__call__` once at import
-does not work, because subclasses define their own `__call__` and sail past it,
-which is exactly why we do the per instance class swap. `serve()` needs to hook
-subclass creation via `__init_subclass__` and wrap each module class as it is
-defined. this decides whether the two line front door is possible at all.
-
 **the observer effect.** forcing eval to measure costs 1.3x on real models and 1.9x
 on toys, so absolute per layer numbers inflate. a fixed calibration constant will
 not work because the distortion scales with layer size. the honest fix is a sampling
 mode (item 10) to get undistorted totals to reconcile against.
 
 ---
+
+## solved
+
+**auto attach with no model handed to us.** solved. wrap every class that defines its
+own `__call__`, walking `nn.Module.__subclasses__()` for classes that already exist,
+plus a `__init_subclass__` hook for classes defined later. mlx_lm builds its model
+classes at `load()` time, so the hook is what catches `TransformerBlock`, `Attention`
+and friends. measured: 66 classes wrapped at install, 76 after loading a qwen model.
 
 ## decided, do not relitigate
 
@@ -210,6 +211,10 @@ mode (item 10) to get undistorted totals to reconcile against.
   voice. do not build a general ui.
 - **we print our own error bars.** every profiler distorts. we are the only one that
   reports the distortion next to the result.
+- **serve defaults to run level, not per layer.** forcing eval at every boundary to get
+  per layer times inflates the run. so `serve()` records an honest run total with one
+  sync at the end and records no per layer times at all, and `detail=True` opts into the
+  distortion. the run says which mode produced it.
 - **verdict before detail.** the binding resource and the utilization go at the top
   of every screen. per layer tables are for after you believe the verdict.
 
