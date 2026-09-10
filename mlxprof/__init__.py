@@ -1,3 +1,5 @@
+from mlxprof.auto import AutoProfiler
+from mlxprof.server import serve
 from mlxprof.core import (
     LayerProfiler,
     leaf_total,
@@ -21,7 +23,9 @@ from mlxprof.core import (
 )
 
 __all__ = [
+    "AutoProfiler",
     "LayerProfiler",
+    "serve",
     "leaf_total",
     "load_state",
     "load_warning",
