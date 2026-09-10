@@ -1,7 +1,10 @@
 from mlxprof.core import (
     LayerProfiler,
     leaf_total,
+    load_state,
+    load_warning,
     machine_ceiling,
+    machine_info,
     mark_leaves,
     measure_bandwidth,
     measure_peak_flops,
@@ -20,7 +23,10 @@ from mlxprof.core import (
 __all__ = [
     "LayerProfiler",
     "leaf_total",
+    "load_state",
+    "load_warning",
     "machine_ceiling",
+    "machine_info",
     "mark_leaves",
     "measure_bandwidth",
     "measure_peak_flops",

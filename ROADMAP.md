@@ -156,6 +156,7 @@ optimisation work and neither torch.profiler nor perfetto makes it easy.
 - [x] roofline: measured machine ceilings, MBU / MFU, names the binding resource
 - [x] installable package with a `mlxprof` command, own venv, no voice dependency
 - [x] `mlxprof bench` and `mlxprof ceiling`
+- [x] real chip topology from sysctl, and a warning when the machine is too busy
 
 ### next, in order
 
@@ -231,6 +232,15 @@ mode (item 10) to get undistorted totals to reconcile against.
 - `prompt_tps` on a cold `stream_generate` is ~10x low (231 vs 2400 tok/s). this bug
   bit us three times, in walkthrough step 3, in the whisper encoder, and in the first
   version of `bench`, which is why item 9 exists
+- the memory cache in front of DRAM is shared between CPU and GPU (Apple Silicon CPU
+  Optimization Guide 5.0), so a measured bandwidth ceiling is best case only. on a
+  loaded machine the same model measured 163 tok/s against 453 on a quiet one, a 2.8x
+  swing with no code change. the tool now reports load and says so
+- `mx.device_info()` returns one string that hides real heterogeneity. an M5 Pro is
+  5 Super + 10 Performance cores whose L1D differs 2x. read `hw.perflevel{N}.*` via
+  sysctl, never the flat `hw.l1dcachesize`, which reports the weakest cores
+- a ceiling should be measured best of N, not mean. averaging folds contention into
+  the number you are calling the hardware limit. this cut ceiling spread from 35% to 6%
 - the observer effect scales with how much real work a layer does. at seq 1 the layer
   split inflates 1687%, at 128 it is 291%, at 512 it is 165%. per layer profiling of a
   single decode step measures our own instrumentation, not the model

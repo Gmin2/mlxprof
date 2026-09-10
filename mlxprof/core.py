@@ -1,3 +1,5 @@
+import os
+import subprocess
 import time
 
 import mlx.core as mx
@@ -76,6 +78,67 @@ def weight_mb(model):
     return sum(seen.values()) / MB
 
 
+def machine_info():
+    """Chip topology from sysctl.
+
+    mx.device_info() returns one device string that hides real heterogeneity. An
+    M5 Pro has Super and Performance clusters whose L1D differs by 2x. The flat
+    hw.l1dcachesize / hw.l2cachesize keys report the lowest performing cores since
+    macOS 12, so always read per performance level instead.
+    """
+
+    def get(key):
+        try:
+            out = subprocess.run(
+                ["sysctl", "-n", key], capture_output=True, text=True, timeout=5
+            )
+            return out.stdout.strip() if out.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+    levels = []
+    n = get("hw.nperflevels")
+    for i in range(int(n) if n and n.isdigit() else 0):
+        cores = get(f"hw.perflevel{i}.physicalcpu")
+        levels.append(
+            {
+                "name": get(f"hw.perflevel{i}.name") or f"level{i}",
+                "cores": int(cores) if cores and cores.isdigit() else 0,
+                "l1d": _int_or_none(get(f"hw.perflevel{i}.l1dcachesize")),
+                "l2": _int_or_none(get(f"hw.perflevel{i}.l2cachesize")),
+                "cpus_per_l2": _int_or_none(get(f"hw.perflevel{i}.cpusperl2")),
+            }
+        )
+    return {
+        "brand": get("machdep.cpu.brand_string") or mx.device_info()["device_name"],
+        "memory": _int_or_none(get("hw.memsize")),
+        "levels": levels,
+    }
+
+
+def load_state():
+    """How busy the machine is. Both ceilings and the model measurement share the
+    memory cache with everything else running, so a loaded machine reports low
+    numbers that look like the model's fault."""
+    try:
+        one, five, fifteen = os.getloadavg()
+    except (OSError, AttributeError):
+        return None
+    cores = sum(lv["cores"] for lv in machine_info()["levels"]) or os.cpu_count() or 1
+    return {"load1": one, "load5": five, "cores": cores, "busy": one > cores * 0.4}
+
+
+def load_warning(state):
+    if not state or not state["busy"]:
+        return ""
+    return (f"  WARNING   load average {state['load1']:.1f} on {state['cores']} cores."
+            f" the machine is busy, these numbers are low and not the model's fault.")
+
+
+def _int_or_none(v):
+    return int(v) if v and v.isdigit() else None
+
+
 def param_count(model):
     """Logical parameter count. Quantised weights are stored packed into uint32,
     so p.size counts words rather than parameters and undercounts by 32/bits."""
@@ -92,12 +155,16 @@ def param_count(model):
 
 
 def _time_op(fn, trials):
+    """Best of N, not the mean. We are measuring a ceiling, and the machine is
+    shared, so a slow trial is contention rather than the hardware's limit."""
     for _ in range(3):
         mx.eval(fn())
-    t0 = time.perf_counter()
+    best = float("inf")
     for _ in range(trials):
+        t0 = time.perf_counter()
         mx.eval(fn())
-    return (time.perf_counter() - t0) / trials
+        best = min(best, time.perf_counter() - t0)
+    return best
 
 
 def measure_bandwidth(mb=256, trials=20):
