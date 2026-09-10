@@ -13,7 +13,10 @@ import mlx.core as mx
 from mlxprof.core import (
     LayerProfiler,
     leaf_total,
+    load_state,
+    load_warning,
     machine_ceiling,
+    machine_info,
     mark_leaves,
     param_count,
     roofline,
@@ -30,13 +33,29 @@ def _bar(pct, width=36, ch="#"):
 
 
 def cmd_ceiling(args):
+    m = machine_info()
     c = machine_ceiling()
-    print(f"\n  {c['device']}")
-    print(f"    memory bandwidth   {c['peak_gbs']:8.1f} GB/s      (measured)")
+    topo = "+".join(f"{lv['cores']}{lv['name'][0]}" for lv in m["levels"]) or "unknown"
+
+    print(f"\n  {m['brand']}   {topo}")
+    for lv in m["levels"]:
+        l1 = f"{lv['l1d']//1024} KiB" if lv["l1d"] else "?"
+        l2 = f"{lv['l2']//MB} MiB" if lv["l2"] else "?"
+        print(f"    {lv['name']:<14} {lv['cores']:>2} cores   L1D {l1:>8}   L2 {l2:>7}"
+              f"   {lv['cpus_per_l2'] or '?'} cores per L2")
+    if m["memory"]:
+        print(f"    unified memory {m['memory']/1024**3:>5.0f} GB      "
+              f"{working_set_mb():.0f} MB recommended working set")
+
+    print(f"\n    memory bandwidth   {c['peak_gbs']:8.1f} GB/s      (measured, quiet machine)")
     print(f"    matmul throughput  {c['peak_tflops']:8.2f} TFLOP/s   (measured)")
     print(f"    ridge point        {c['ridge']:8.1f} FLOP/byte")
-    print(f"    unified memory     {working_set_mb():8.0f} MB recommended working set\n")
-    print("  below the ridge point you are memory bound, above it you are compute bound.\n")
+
+    print("\n  below the ridge point you are memory bound, above it you are compute bound.")
+    print("  the memory cache in front of DRAM is shared with the CPU, so the bandwidth")
+    print("  above is a best case. under CPU load a GPU kernel gets less of it.")
+    w = load_warning(load_state())
+    print(f"\n{w}\n" if w else "")
 
 
 def _layer_breakdown(model, token_id, seq=128):
@@ -77,6 +96,7 @@ def cmd_bench(args):
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
     print("measuring machine ceilings ...")
+    load_at_start = load_state()
     ceiling = machine_ceiling()
 
     print(f"loading {args.model} ...")
@@ -133,6 +153,10 @@ def cmd_bench(args):
           f"   {last.peak_memory*1024/ws*100:.1f}% of working set")
     warn = "  <- too high to trust the split" if inflation > 60 else ""
     print(f"  accuracy   per layer numbers inflated ~{inflation:.0f}%, totals are exact{warn}")
+
+    w = load_warning(load_at_start)
+    if w:
+        print(f"\n{w}")
 
     d = decode
     print(f"\n  VERDICT   decode is {d['bound']} bound at {d['utilization']*100:.0f}% {d['metric']}")
