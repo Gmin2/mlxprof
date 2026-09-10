@@ -4,3 +4,7 @@ __pycache__/
 tmp/
 .DS_Store
 *.gputrace
+
+# reference docs, some are licensed for registered developer use only
+*.pdf
+notes/
